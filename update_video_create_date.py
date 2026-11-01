@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -72,6 +73,11 @@ def parse_args() -> argparse.Namespace:
         action="store_false",
         help="skip the confirmation prompt and apply changes immediately",
     )
+    parser.add_argument(
+        "-sidecar-only",
+        action="store_true",
+        help="write only the XMP sidecar (recommended for Immich; avoids rewriting video files)",
+    )
     return parser.parse_args()
 
 
@@ -114,26 +120,31 @@ def find_videos(pattern: str) -> list[Path]:
     return videos
 
 
-def exiftool_commands(video: Path, utc_date: str, local_date: str) -> list[list[str]]:
+def sidecar_command(video: Path, local_date: str) -> tuple[list[str], str]:
     sidecar = Path(f"{video}.xmp")
-    if video.suffix.lower() in SIDECAR_ONLY_EXTENSIONS:
-        if sidecar.is_symlink():
-            raise ValueError(f"refusing to write through a sidecar symlink: {sidecar.name}")
-        date_args = [
-            f"-XMP-exif:DateTimeOriginal={local_date}",
-            f"-XMP-photoshop:DateCreated={local_date}",
-            f"-XMP-xmp:CreateDate={local_date}",
-        ]
-        if sidecar.exists():
-            return [[
-                "exiftool",
-                "-overwrite_original",
-                "-P",
-                *date_args,
-                str(sidecar),
-            ]]
-        return [["exiftool", "-o", str(sidecar), *date_args]]
+    if sidecar.is_symlink():
+        raise ValueError(f"refusing to write through a sidecar symlink: {sidecar.name}")
+    date_args = [
+        f"-XMP-exif:DateTimeOriginal={local_date}",
+        f"-XMP-photoshop:DateCreated={local_date}",
+        f"-XMP-xmp:CreateDate={local_date}",
+    ]
+    if sidecar.exists():
+        command = ["exiftool", "-overwrite_original", "-P", *date_args, str(sidecar)]
+        action = "update"
+    else:
+        command = ["exiftool", "-o", str(sidecar), *date_args]
+        action = "create"
+    return command, f"{action.capitalize()} XMP sidecar {sidecar.name}"
 
+
+def exiftool_commands(
+    video: Path, utc_date: str, local_date: str, sidecar_only: bool = False
+) -> list[tuple[list[str], str]]:
+    if video.suffix.lower() in SIDECAR_ONLY_EXTENSIONS or sidecar_only:
+        return [sidecar_command(video, local_date)]
+
+    sidecar = Path(f"{video}.xmp")
     video_args = [
         "exiftool",
         "-overwrite_original",
@@ -155,22 +166,19 @@ def exiftool_commands(video: Path, utc_date: str, local_date: str) -> list[list[
         str(video),
     ]
 
+    size_mb = video.stat().st_size / (1024 * 1024)
+    video_label = (
+        f"Rewrite embedded metadata in {video.name} ({size_mb:.1f} MiB); "
+        "ExifTool must rewrite the video file"
+    )
+    commands = [(video_args, video_label)]
+
     # Immich checks an XMP sidecar before embedded video dates. Keep a paired sidecar
     # aligned so its higher-priority DateTimeOriginal cannot mask the updated movie.
     if sidecar.is_file() and not sidecar.is_symlink():
-        sidecar_args = [
-            "exiftool",
-            "-overwrite_original",
-            "-P",
-            "-api",
-            "LargeFileSupport=1",
-            f"-XMP-exif:DateTimeOriginal={local_date}",
-            f"-XMP-photoshop:DateCreated={local_date}",
-            f"-XMP-xmp:CreateDate={local_date}",
-            str(sidecar),
-        ]
-        return [video_args, sidecar_args]
-    return [video_args]
+        sidecar_args, sidecar_label = sidecar_command(video, local_date)
+        commands.append((sidecar_args, sidecar_label))
+    return commands
 
 
 def read_date_tags(path: Path, exiftool: str) -> list[tuple[str, str]]:
@@ -202,9 +210,11 @@ def read_date_tags(path: Path, exiftool: str) -> list[tuple[str, str]]:
     return dates
 
 
-def describe_changes(video: Path, utc_date: str, local_date: str, exiftool: str) -> None:
+def describe_changes(
+    video: Path, utc_date: str, local_date: str, exiftool: str, sidecar_only: bool = False
+) -> None:
     sidecar = Path(f"{video}.xmp")
-    if video.suffix.lower() in SIDECAR_ONLY_EXTENSIONS and sidecar.is_symlink():
+    if (video.suffix.lower() in SIDECAR_ONLY_EXTENSIONS or sidecar_only) and sidecar.is_symlink():
         raise RuntimeError(f"refusing to write through a sidecar symlink: {sidecar.name}")
     print(f"\nFile: {video.name}")
     date_sources: list[tuple[str, str, str]] = []
@@ -234,7 +244,7 @@ def describe_changes(video: Path, utc_date: str, local_date: str, exiftool: str)
     print("  NEW DATE (requested)")
     print(f"    Local time: {local_date}")
 
-    if video.suffix.lower() in SIDECAR_ONLY_EXTENSIONS:
+    if video.suffix.lower() in SIDECAR_ONLY_EXTENSIONS or sidecar_only:
         print("  CHANGES TO APPLY")
         action = "update" if sidecar.exists() else "create"
         print(f"  Will {action} {sidecar.name} with:")
@@ -250,6 +260,9 @@ def describe_changes(video: Path, utc_date: str, local_date: str, exiftool: str)
         print(f"    QuickTime Keys:CreationDate and embedded XMP date fields = {local_date}")
         if sidecar.is_file() and not sidecar.is_symlink():
             print(f"  Will also update the date fields in {sidecar.name} = {local_date}")
+        if not sidecar_only and video.stat().st_size >= 100 * 1024 * 1024:
+            print("  NOTE: ExifTool must rewrite the full video file; this can take a while on mounted storage.")
+            print("        For an Immich-only date update, use -sidecar-only to avoid rewriting the video.")
 
 
 def confirm_changes() -> bool:
@@ -276,7 +289,7 @@ def main() -> int:
 
     try:
         for video in videos:
-            describe_changes(video, utc_date, local_date, exiftool)
+            describe_changes(video, utc_date, local_date, exiftool, options.sidecar_only)
     except RuntimeError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -290,11 +303,29 @@ def main() -> int:
         return 0
 
     failed = False
+    jobs: list[tuple[list[str], str]] = []
     for video in videos:
-        for command in exiftool_commands(video, utc_date, local_date):
-            command[0] = exiftool
+        try:
+            jobs.extend(exiftool_commands(video, utc_date, local_date, options.sidecar_only))
+        except ValueError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+
+    for index, (command, description) in enumerate(jobs, start=1):
+        command[0] = exiftool
+        print(f"\n[{index}/{len(jobs)}] Starting: {description} ...", flush=True)
+        started = time.monotonic()
+        try:
             result = subprocess.run(command, check=False)
-            failed |= result.returncode != 0
+        except KeyboardInterrupt:
+            print("\nInterrupted. Check the file metadata before retrying.", flush=True)
+            return 130
+        elapsed = time.monotonic() - started
+        if result.returncode == 0:
+            print(f"[{index}/{len(jobs)}] Finished in {elapsed:.1f} seconds.", flush=True)
+        else:
+            print(f"[{index}/{len(jobs)}] Failed with exit code {result.returncode}.", flush=True)
+            failed = True
     return 1 if failed else 0
 
 

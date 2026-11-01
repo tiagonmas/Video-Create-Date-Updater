@@ -39,6 +39,13 @@ python3 ~/repos/video-create-date-updater/update_video_create_date.py \
 
 Remove `-dry-run` to create `Cassete16wmm.divx.xmp`. The tool displays separate **CURRENT DATE** and **NEW DATE** sections, then lists the exact fields it plans to change and asks for confirmation. This changes only the sidecar, not the DivX file. If Immich already has this video in an external library, run the Sidecar Metadata **Discover** job and then **Sync** so it associates and reads the new sidecar.
 
+For MP4/QuickTime videos, the default mode edits embedded dates and then updates an existing sidecar. Rewriting a large video can take time, especially on network or cloud-mounted storage; the script prints a start and completion message for each operation. To update the date Immich reads without rewriting the video, pass `-sidecar-only`. This updates the matching sidecar or creates one if needed:
+
+```sh
+python3 ~/repos/video-create-date-updater/update_video_create_date.py \
+  -file 'video.mp4' -date '2024-01-15 12:00:00' -sidecar-only
+```
+
 When the preview is correct, run the same command without `-dry-run` to write the dates:
 
 ```sh
@@ -62,15 +69,16 @@ python3 ~/repos/video-create-date-updater/update_video_create_date.py -h
 | `-dry-run` | Read and display current date metadata and the planned field updates, then exit without writing to any files. |
 | `-confirm` | Ask once before applying changes. This is the default. |
 | `-no-confirm` | Skip the confirmation prompt and apply changes immediately. |
+| `-sidecar-only` | Update or create the XMP sidecar without changing the video. Recommended when Immich is the target and rewriting a large media file would be slow. |
 
 ## File format handling
 
 | Extension | What the tool updates |
 | --- | --- |
-| `.mp4`, `.mov`, `.m4v`, `.3gp`, `.3g2`, `.qt` | Embedded QuickTime dates. If a matching `VIDEO.ext.xmp` sidecar exists, its date fields are updated too because Immich prioritizes sidecar dates. |
+| `.mp4`, `.mov`, `.m4v`, `.3gp`, `.3g2`, `.qt` | By default, embedded QuickTime dates and any matching `VIDEO.ext.xmp` sidecar. With `-sidecar-only`, only the sidecar is updated or created. |
 | `.divx` | The paired `VIDEO.divx.xmp` sidecar only. The DivX video is never opened or modified. The sidecar is created if missing or updated if present. |
 | Any other extension | Unsupported. The tool reports an error and makes no changes. |
 
 If a wildcard matches even one unsupported regular file, the whole invocation stops before processing any matches. This avoids partially applying a mixed batch. Directories and symlinks are skipped. The supported video extensions are `.mp4`, `.mov`, `.m4v`, `.3gp`, `.3g2`, `.qt`, and `.divx`.
 
-QuickTime formats are edited in place with ExifTool's backup disabled; keep a separate backup before applying changes. For an existing Immich external-library asset, run Sidecar Metadata **Discover** and then **Sync** after creating a DivX sidecar.
+QuickTime formats are edited in place with ExifTool's backup disabled; keep a separate backup before applying changes. Use `-sidecar-only` to avoid rewriting the media file. For an existing Immich external-library asset, run Sidecar Metadata **Discover** and then **Sync** after creating a sidecar.
