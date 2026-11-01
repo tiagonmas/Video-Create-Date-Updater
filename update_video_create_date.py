@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import shutil
 import subprocess
@@ -16,6 +17,20 @@ from pathlib import Path
 QUICKTIME_EXTENSIONS = {".mp4", ".mov", ".m4v", ".3gp", ".3g2", ".qt"}
 SIDECAR_ONLY_EXTENSIONS = {".divx"}
 SUPPORTED_EXTENSIONS = QUICKTIME_EXTENSIONS | SIDECAR_ONLY_EXTENSIONS
+IMMICH_DATE_PRIORITY = (
+    "SubSecDateTimeOriginal",
+    "SubSecCreateDate",
+    "DateTimeOriginal",
+    "CreationDate",
+    "CreateDate",
+    "SubSecMediaCreateDate",
+    "MediaCreateDate",
+    "DateTimeCreated",
+    "GPSDateTime",
+    "DateTimeUTC",
+    "SonyDateTime2",
+    "SourceImageCreateTime",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -42,7 +57,20 @@ def parse_args() -> argparse.Namespace:
         "-dry-run",
         dest="dry_run",
         action="store_true",
-        help="show planned targets and values without opening or changing media files",
+        help="read current dates and show planned changes without writing to any files",
+    )
+    parser.add_argument(
+        "-confirm",
+        dest="confirm",
+        action="store_true",
+        default=True,
+        help="ask before writing changes (default)",
+    )
+    parser.add_argument(
+        "-no-confirm",
+        dest="confirm",
+        action="store_false",
+        help="skip the confirmation prompt and apply changes immediately",
     )
     return parser.parse_args()
 
@@ -145,6 +173,88 @@ def exiftool_commands(video: Path, utc_date: str, local_date: str) -> list[list[
     return [video_args]
 
 
+def read_date_tags(path: Path, exiftool: str) -> list[tuple[str, str]]:
+    result = subprocess.run(
+        [exiftool, "-j", "-G1", "-a", "-s", "-time:all", "-api", "QuickTimeUTC=1", str(path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(f"ExifTool could not read {path.name}: {detail}")
+
+    try:
+        records = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"ExifTool returned invalid metadata for {path.name}") from error
+
+    dates: list[tuple[str, str]] = []
+    for record in records:
+        for qualified_name, value in record.items():
+            tag_name = qualified_name.rsplit(":", 1)[-1]
+            if tag_name not in IMMICH_DATE_PRIORITY or not isinstance(value, (str, int, float)):
+                continue
+            rendered = str(value).strip()
+            if not rendered or rendered.startswith("0000:00:00"):
+                continue
+            dates.append((qualified_name, rendered))
+    return dates
+
+
+def describe_changes(video: Path, utc_date: str, local_date: str, exiftool: str) -> None:
+    sidecar = Path(f"{video}.xmp")
+    if video.suffix.lower() in SIDECAR_ONLY_EXTENSIONS and sidecar.is_symlink():
+        raise RuntimeError(f"refusing to write through a sidecar symlink: {sidecar.name}")
+    print(f"\n{video.name}")
+    date_sources: list[tuple[str, str, str]] = []
+    if sidecar.is_file() and not sidecar.is_symlink():
+        date_sources.extend(("sidecar", name, value) for name, value in read_date_tags(sidecar, exiftool))
+    date_sources.extend(("video", name, value) for name, value in read_date_tags(video, exiftool))
+
+    best = None
+    for candidate_name in IMMICH_DATE_PRIORITY:
+        best = next((entry for entry in date_sources if entry[1].rsplit(":", 1)[-1] == candidate_name), None)
+        if best:
+            break
+    if best:
+        source, name, value = best
+        print(f"  Current best Immich date candidate: {name} ({source}) = {value}")
+    else:
+        print("  Current Immich date candidate: none found in recognized metadata fields")
+
+    if date_sources:
+        print("  Other recognized date fields currently set:")
+        seen: set[tuple[str, str, str]] = set()
+        for entry in date_sources:
+            if entry == best or entry in seen:
+                continue
+            seen.add(entry)
+            print(f"    {entry[1]} ({entry[0]}) = {entry[2]}")
+
+    if video.suffix.lower() in SIDECAR_ONLY_EXTENSIONS:
+        action = "update" if sidecar.exists() else "create"
+        print(f"  Will {action} {sidecar.name} with:")
+        print(f"    XMP-exif:DateTimeOriginal = {local_date}")
+        print(f"    XMP-photoshop:DateCreated = {local_date}")
+        print(f"    XMP-xmp:CreateDate = {local_date}")
+        print("  The video file itself will not be changed.")
+    else:
+        print("  Will update the video with:")
+        print(f"    QuickTime Create/Modify, Track Create/Modify, and Media Create/Modify dates = {utc_date} UTC")
+        print(f"    QuickTime Keys:CreationDate and embedded XMP date fields = {local_date}")
+        if sidecar.is_file() and not sidecar.is_symlink():
+            print(f"  Will also update the date fields in {sidecar.name} = {local_date}")
+
+
+def confirm_changes() -> bool:
+    try:
+        answer = input("Apply these changes? [y/N]: ").strip().casefold()
+    except EOFError:
+        answer = ""
+    return answer in {"y", "yes"}
+
+
 def main() -> int:
     options = parse_args()
     try:
@@ -154,28 +264,25 @@ def main() -> int:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
-    if options.dry_run:
-        print("DRY RUN — no media files were opened or changed")
-        print(f"Date in local timezone: {local_date}")
-        if any(video.suffix.lower() in QUICKTIME_EXTENSIONS for video in videos):
-            print(f"QuickTime UTC date:    {utc_date}")
-        for video in videos:
-            sidecar = Path(f"{video}.xmp")
-            if video.suffix.lower() in SIDECAR_ONLY_EXTENSIONS:
-                if sidecar.is_symlink():
-                    print(f"Would skip: {video.name} (sidecar is a symlink)")
-                else:
-                    action = "update" if sidecar.exists() else "create"
-                    print(f"Would {action} sidecar only: {sidecar.name}")
-            else:
-                suffix = f" and {sidecar.name}" if sidecar.is_file() and not sidecar.is_symlink() else ""
-                print(f"Would update: {video.name}{suffix}")
-        return 0
-
     exiftool = shutil.which("exiftool")
     if exiftool is None:
         print("error: ExifTool is required; install it and ensure 'exiftool' is on PATH", file=sys.stderr)
         return 2
+
+    try:
+        for video in videos:
+            describe_changes(video, utc_date, local_date, exiftool)
+    except RuntimeError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+
+    if options.dry_run:
+        print("\nDRY RUN — no metadata was written")
+        return 0
+
+    if options.confirm and not confirm_changes():
+        print("Cancelled — no files were changed.")
+        return 0
 
     failed = False
     for video in videos:

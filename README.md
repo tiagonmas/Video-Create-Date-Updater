@@ -29,7 +29,7 @@ python3 ~/repos/video-create-date-updater/update_video_create_date.py \
   -file 'Alorna*.mp4' -date '1983-05-14 16:30:00' -dry-run
 ```
 
-For a DivX video, preview creation of its sidecar (substitute its correct date):
+For a DivX video, preview its current metadata and the sidecar that would be created (substitute its correct date):
 
 ```sh
 cd /storage/onedrive/Videos/Home
@@ -37,7 +37,7 @@ python3 ~/repos/video-create-date-updater/update_video_create_date.py \
   -file 'Cassete16wmm.divx' -date 'YYYY-MM-DD HH:MM:SS' -dry-run
 ```
 
-Remove `-dry-run` to create `Cassete16wmm.divx.xmp`. This changes only the sidecar, not the DivX file. If Immich already has this video in an external library, run the Sidecar Metadata **Discover** job and then **Sync** so it associates and reads the new sidecar.
+Remove `-dry-run` to create `Cassete16wmm.divx.xmp`. The tool first displays the current Immich date candidate, other recognized date fields, and the exact fields it plans to update, then asks for confirmation. This changes only the sidecar, not the DivX file. If Immich already has this video in an external library, run the Sidecar Metadata **Discover** job and then **Sync** so it associates and reads the new sidecar.
 
 When the preview is correct, run the same command without `-dry-run` to write the dates:
 
@@ -59,7 +59,9 @@ python3 ~/repos/video-create-date-updater/update_video_create_date.py -h
 | `-h`, `--help` | Show help. |
 | `-file PATTERN` | Required filename or wildcard. Only files in the current folder are considered; path separators and parent-directory patterns are rejected, and directories and symlinks are skipped. Quote wildcard patterns. |
 | `-date 'YYYY-MM-DD HH:MM:SS'` | Required correct capture date and time, interpreted in the computer's local timezone. |
-| `-dry-run` | List the planned video and sidecar targets and values. It does not open media files or invoke ExifTool, so it cannot change media contents or filesystem timestamps. |
+| `-dry-run` | Read and display current date metadata and the planned field updates, then exit without writing to any files. |
+| `-confirm` | Ask once before applying changes. This is the default. |
+| `-no-confirm` | Skip the confirmation prompt and apply changes immediately. |
 
 ## File format handling
 
