@@ -26,7 +26,7 @@ Change to the folder containing the videos. `-file` accepts a filename or a quot
 ```sh
 cd /storage/onedrive/Videos
 python3 ~/repos/video-create-date-updater/update_video_create_date.py \
-  -file 'Alorna*.mp4' -date '1983-05-14 16:30:00' -dry-run
+  -file 'video.mp4' -date '2024-01-15 12:00:00' -dry-run
 ```
 
 For a DivX video, preview its current metadata and the sidecar that would be created (substitute its correct date):
@@ -43,7 +43,7 @@ When the preview is correct, run the same command without `-dry-run` to write th
 
 ```sh
 python3 ~/repos/video-create-date-updater/update_video_create_date.py \
-  -file 'Alorna*.mp4' -date '1983-05-14 16:30:00'
+  -file 'video.mp4' -date '2024-01-15 12:00:00'
 ```
 
 `-date` is a local wall-clock time in the computer's configured timezone. Quote the value so the shell passes it as one argument. To see all arguments:
