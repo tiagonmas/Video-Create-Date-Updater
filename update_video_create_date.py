@@ -13,14 +13,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".m4v", ".3gp", ".3g2", ".qt"}
+QUICKTIME_EXTENSIONS = {".mp4", ".mov", ".m4v", ".3gp", ".3g2", ".qt"}
+SIDECAR_ONLY_EXTENSIONS = {".divx"}
+SUPPORTED_EXTENSIONS = QUICKTIME_EXTENSIONS | SIDECAR_ONLY_EXTENSIONS
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Set the embedded creation dates of local MP4/QuickTime videos and their "
-            "matching XMP sidecars. Dates are given in the computer's local timezone."
+            "Set local MP4/QuickTime creation dates or create/update an XMP sidecar "
+            "for DivX videos. Dates use the computer's local timezone."
         ),
         allow_abbrev=False,
     )
@@ -77,7 +79,7 @@ def find_videos(pattern: str) -> list[Path]:
     if unsupported:
         raise ValueError(
             "matched files with unsupported extensions (supported: MP4, MOV, M4V, "
-            "3GP, 3G2, QT): " + ", ".join(unsupported)
+            "3GP, 3G2, QT, DIVX): " + ", ".join(unsupported)
         )
     if not videos:
         raise ValueError(f"no supported local video files matched: {pattern}")
@@ -85,6 +87,25 @@ def find_videos(pattern: str) -> list[Path]:
 
 
 def exiftool_commands(video: Path, utc_date: str, local_date: str) -> list[list[str]]:
+    sidecar = Path(f"{video}.xmp")
+    if video.suffix.lower() in SIDECAR_ONLY_EXTENSIONS:
+        if sidecar.is_symlink():
+            raise ValueError(f"refusing to write through a sidecar symlink: {sidecar.name}")
+        date_args = [
+            f"-XMP-exif:DateTimeOriginal={local_date}",
+            f"-XMP-photoshop:DateCreated={local_date}",
+            f"-XMP-xmp:CreateDate={local_date}",
+        ]
+        if sidecar.exists():
+            return [[
+                "exiftool",
+                "-overwrite_original",
+                "-P",
+                *date_args,
+                str(sidecar),
+            ]]
+        return [["exiftool", "-o", str(sidecar), *date_args]]
+
     video_args = [
         "exiftool",
         "-overwrite_original",
@@ -108,7 +129,6 @@ def exiftool_commands(video: Path, utc_date: str, local_date: str) -> list[list[
 
     # Immich checks an XMP sidecar before embedded video dates. Keep a paired sidecar
     # aligned so its higher-priority DateTimeOriginal cannot mask the updated movie.
-    sidecar = Path(f"{video}.xmp")
     if sidecar.is_file() and not sidecar.is_symlink():
         sidecar_args = [
             "exiftool",
@@ -137,11 +157,19 @@ def main() -> int:
     if options.dry_run:
         print("DRY RUN — no media files were opened or changed")
         print(f"Date in local timezone: {local_date}")
-        print(f"QuickTime UTC date:    {utc_date}")
+        if any(video.suffix.lower() in QUICKTIME_EXTENSIONS for video in videos):
+            print(f"QuickTime UTC date:    {utc_date}")
         for video in videos:
             sidecar = Path(f"{video}.xmp")
-            suffix = f" and {sidecar.name}" if sidecar.is_file() and not sidecar.is_symlink() else ""
-            print(f"Would update: {video.name}{suffix}")
+            if video.suffix.lower() in SIDECAR_ONLY_EXTENSIONS:
+                if sidecar.is_symlink():
+                    print(f"Would skip: {video.name} (sidecar is a symlink)")
+                else:
+                    action = "update" if sidecar.exists() else "create"
+                    print(f"Would {action} sidecar only: {sidecar.name}")
+            else:
+                suffix = f" and {sidecar.name}" if sidecar.is_file() and not sidecar.is_symlink() else ""
+                print(f"Would update: {video.name}{suffix}")
         return 0
 
     exiftool = shutil.which("exiftool")
