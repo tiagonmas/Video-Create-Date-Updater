@@ -210,9 +210,29 @@ def read_date_tags(path: Path, exiftool: str) -> list[tuple[str, str]]:
     return dates
 
 
+def date_matches(value: str, local_date: str) -> bool:
+    """Compare an ExifTool date with the requested local date as instants."""
+    normalized = value.strip()
+    if len(normalized) >= 10 and normalized[4] == ":" and normalized[7] == ":":
+        normalized = f"{normalized[:4]}-{normalized[5:7]}-{normalized[8:]}"
+    normalized = normalized.replace("Z", "+00:00")
+    try:
+        current = datetime.fromisoformat(normalized)
+        requested = datetime.fromisoformat(local_date)
+    except ValueError:
+        return False
+
+    # Treat timezone-less metadata as local time, matching the -date argument.
+    if current.tzinfo is None:
+        current = current.astimezone()
+    if requested.tzinfo is None:
+        requested = requested.astimezone()
+    return current.astimezone(timezone.utc) == requested.astimezone(timezone.utc)
+
+
 def describe_changes(
     video: Path, utc_date: str, local_date: str, exiftool: str, sidecar_only: bool = False
-) -> None:
+) -> bool:
     sidecar = Path(f"{video}.xmp")
     if (video.suffix.lower() in SIDECAR_ONLY_EXTENSIONS or sidecar_only) and sidecar.is_symlink():
         raise RuntimeError(f"refusing to write through a sidecar symlink: {sidecar.name}")
@@ -244,6 +264,10 @@ def describe_changes(
     print("  NEW DATE (requested)")
     print(f"    Local time: {local_date}")
 
+    if best and date_matches(best[2], local_date):
+        print("  NO CHANGES NEEDED — current Immich date already matches the requested date.")
+        return False
+
     if video.suffix.lower() in SIDECAR_ONLY_EXTENSIONS or sidecar_only:
         print("  CHANGES TO APPLY")
         action = "update" if sidecar.exists() else "create"
@@ -263,6 +287,7 @@ def describe_changes(
         if not sidecar_only and video.stat().st_size >= 100 * 1024 * 1024:
             print("  NOTE: ExifTool must rewrite the full video file; this can take a while on mounted storage.")
             print("        For an Immich-only date update, use -sidecar-only to avoid rewriting the video.")
+    return True
 
 
 def confirm_changes() -> bool:
@@ -287,9 +312,11 @@ def main() -> int:
         print("error: ExifTool is required; install it and ensure 'exiftool' is on PATH", file=sys.stderr)
         return 2
 
+    videos_to_update: list[Path] = []
     try:
         for video in videos:
-            describe_changes(video, utc_date, local_date, exiftool, options.sidecar_only)
+            if describe_changes(video, utc_date, local_date, exiftool, options.sidecar_only):
+                videos_to_update.append(video)
     except RuntimeError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -298,13 +325,17 @@ def main() -> int:
         print("\nDRY RUN — no metadata was written")
         return 0
 
+    if not videos_to_update:
+        print("\nNo changes needed for any matched file.")
+        return 0
+
     if options.confirm and not confirm_changes():
         print("Cancelled — no files were changed.")
         return 0
 
     failed = False
     jobs: list[tuple[list[str], str]] = []
-    for video in videos:
+    for video in videos_to_update:
         try:
             jobs.extend(exiftool_commands(video, utc_date, local_date, options.sidecar_only))
         except ValueError as error:

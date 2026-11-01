@@ -12,6 +12,8 @@ Immich checks embedded and sidecar date tags in priority order. Its [metadata se
 
 The chosen capture date is consequently available through the higher-priority tags Immich reads. The filesystem modification date is preserved (`-P`) and is not treated as the capture date. ExifTool documents that QuickTime integer date tags are stored as UTC; `QuickTimeUTC` is enabled to write those values consistently. See the [ExifTool QuickTime tag documentation](https://exiftool.org/TagNames/QuickTime.html).
 
+Before showing changes or asking for confirmation, the tool compares the requested date with the current best Immich date candidate. If they represent the same instant, it skips that file entirely, even if some lower-priority date fields are missing or differ. If every matched file already has the requested date, the tool exits without prompting or writing metadata.
+
 For DivX, the tool writes these XMP date properties to `VIDEO.divx.xmp` and leaves the video unchanged. Immich recognizes the `VIDEO.ext.xmp` naming form and reads `exif:DateTimeOriginal` before the other supported XMP date fields. See Immich's [XMP sidecar documentation](https://docs.immich.app/features/xmp-sidecars/).
 
 ## Requirements
