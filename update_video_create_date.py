@@ -206,7 +206,7 @@ def describe_changes(video: Path, utc_date: str, local_date: str, exiftool: str)
     sidecar = Path(f"{video}.xmp")
     if video.suffix.lower() in SIDECAR_ONLY_EXTENSIONS and sidecar.is_symlink():
         raise RuntimeError(f"refusing to write through a sidecar symlink: {sidecar.name}")
-    print(f"\n{video.name}")
+    print(f"\nFile: {video.name}")
     date_sources: list[tuple[str, str, str]] = []
     if sidecar.is_file() and not sidecar.is_symlink():
         date_sources.extend(("sidecar", name, value) for name, value in read_date_tags(sidecar, exiftool))
@@ -217,22 +217,25 @@ def describe_changes(video: Path, utc_date: str, local_date: str, exiftool: str)
         best = next((entry for entry in date_sources if entry[1].rsplit(":", 1)[-1] == candidate_name), None)
         if best:
             break
+    print("  CURRENT DATE (best Immich candidate)")
     if best:
         source, name, value = best
-        print(f"  Current best Immich date candidate: {name} ({source}) = {value}")
+        print(f"    Date:   {value}")
+        print(f"    Source: {name} in the {source}")
     else:
-        print("  Current Immich date candidate: none found in recognized metadata fields")
+        print("    No recognized date is currently set in metadata.")
 
-    if date_sources:
-        print("  Other recognized date fields currently set:")
-        seen: set[tuple[str, str, str]] = set()
-        for entry in date_sources:
-            if entry == best or entry in seen:
-                continue
-            seen.add(entry)
-            print(f"    {entry[1]} ({entry[0]}) = {entry[2]}")
+    other_dates = list(dict.fromkeys(entry for entry in date_sources if entry != best))
+    if other_dates:
+        print("  Other recognized dates currently stored:")
+        for source, name, value in other_dates:
+            print(f"    {value} — {name} in the {source}")
+
+    print("  NEW DATE (requested)")
+    print(f"    Local time: {local_date}")
 
     if video.suffix.lower() in SIDECAR_ONLY_EXTENSIONS:
+        print("  CHANGES TO APPLY")
         action = "update" if sidecar.exists() else "create"
         print(f"  Will {action} {sidecar.name} with:")
         print(f"    XMP-exif:DateTimeOriginal = {local_date}")
@@ -240,6 +243,8 @@ def describe_changes(video: Path, utc_date: str, local_date: str, exiftool: str)
         print(f"    XMP-xmp:CreateDate = {local_date}")
         print("  The video file itself will not be changed.")
     else:
+        print(f"    QuickTime UTC storage value: {utc_date}")
+        print("  CHANGES TO APPLY")
         print("  Will update the video with:")
         print(f"    QuickTime Create/Modify, Track Create/Modify, and Media Create/Modify dates = {utc_date} UTC")
         print(f"    QuickTime Keys:CreationDate and embedded XMP date fields = {local_date}")

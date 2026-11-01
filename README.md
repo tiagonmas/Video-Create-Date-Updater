@@ -37,7 +37,7 @@ python3 ~/repos/video-create-date-updater/update_video_create_date.py \
   -file 'Cassete16wmm.divx' -date 'YYYY-MM-DD HH:MM:SS' -dry-run
 ```
 
-Remove `-dry-run` to create `Cassete16wmm.divx.xmp`. The tool first displays the current Immich date candidate, other recognized date fields, and the exact fields it plans to update, then asks for confirmation. This changes only the sidecar, not the DivX file. If Immich already has this video in an external library, run the Sidecar Metadata **Discover** job and then **Sync** so it associates and reads the new sidecar.
+Remove `-dry-run` to create `Cassete16wmm.divx.xmp`. The tool displays separate **CURRENT DATE** and **NEW DATE** sections, then lists the exact fields it plans to change and asks for confirmation. This changes only the sidecar, not the DivX file. If Immich already has this video in an external library, run the Sidecar Metadata **Discover** job and then **Sync** so it associates and reads the new sidecar.
 
 When the preview is correct, run the same command without `-dry-run` to write the dates:
 
