@@ -57,8 +57,18 @@ python3 ~/repos/video-create-date-updater/update_video_create_date.py -h
 | Argument | Description |
 | --- | --- |
 | `-h`, `--help` | Show help. |
-| `-file PATTERN` | Required filename or wildcard. Only files in the current folder are considered; paths, subfolders, and symlinks are rejected or skipped. Quote wildcard patterns. |
+| `-file PATTERN` | Required filename or wildcard. Only files in the current folder are considered; path separators and parent-directory patterns are rejected, and directories and symlinks are skipped. Quote wildcard patterns. |
 | `-date 'YYYY-MM-DD HH:MM:SS'` | Required correct capture date and time, interpreted in the computer's local timezone. |
 | `-dry-run` | List the planned video and sidecar targets and values. It does not open media files or invoke ExifTool, so it cannot change media contents or filesystem timestamps. |
 
-Supported video extensions are `.mp4`, `.mov`, `.m4v`, `.3gp`, `.3g2`, `.qt`, and `.divx`. QuickTime formats are edited in place with ExifTool's backup disabled; keep a separate backup before applying bulk changes. DivX files use a sidecar-only update and the video itself is left untouched.
+## File format handling
+
+| Extension | What the tool updates |
+| --- | --- |
+| `.mp4`, `.mov`, `.m4v`, `.3gp`, `.3g2`, `.qt` | Embedded QuickTime dates. If a matching `VIDEO.ext.xmp` sidecar exists, its date fields are updated too because Immich prioritizes sidecar dates. |
+| `.divx` | The paired `VIDEO.divx.xmp` sidecar only. The DivX video is never opened or modified. The sidecar is created if missing or updated if present. |
+| Any other extension | Unsupported. The tool reports an error and makes no changes. |
+
+If a wildcard matches even one unsupported regular file, the whole invocation stops before processing any matches. This avoids partially applying a mixed batch. Directories and symlinks are skipped. The supported video extensions are `.mp4`, `.mov`, `.m4v`, `.3gp`, `.3g2`, `.qt`, and `.divx`.
+
+QuickTime formats are edited in place with ExifTool's backup disabled; keep a separate backup before applying changes. For an existing Immich external-library asset, run Sidecar Metadata **Discover** and then **Sync** after creating a DivX sidecar.
